@@ -19,3 +19,13 @@ _(Grows as notes are added. Split a topic into its own file once it outgrows a s
 - One `##` section per topic, each with: **Concept → The change → Gotchas → Interview line → References.**
 - Anchor notes to real code from actual projects, not toy examples.
 - Every claim you'd repeat in an interview gets a source link.
+
+## Extraction Checklist
+
+When reading an article or write-up, extract the lesson using this lens:
+
+- **What problem did they solve?** - the why
+- **What did they choose and why?** - the decision plus reasoning
+- **What was the key engineering tradeoff?** - the most interview-worthy insight
+- **How does it connect to what I'm building?** - makes it sticky
+

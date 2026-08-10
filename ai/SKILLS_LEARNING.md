@@ -78,3 +78,29 @@ This turns a keyspace walk into a direct Set lookup. `scan_iter()` is the right 
 - [Why You Should Not Use KEYS in Production — OneUptime](https://oneuptime.com/blog/post/2026-03-31-redis-why-not-use-keys-command/view) (secondary-index pattern)
 - [SCAN performance and the COUNT parameter — KeyDB](https://docs.keydb.dev/blog/2020/08/10/blog-post/) (COUNT benchmarks)
 - [SCAN, KEYS & safe retrieval — Last9](https://last9.io/blog/retrieving-all-keys-in-redis/) (DBSIZE for counting)
+
+
+### Semantic Caching
+
+Semantic caching stores responses based on the meaning of a query rather than an exact text match.
+
+For example, these two prompts would be treated as equivalent:
+
+- "How do I deploy a Kubernetes cluster?"
+- "What's the best way to deploy Kubernetes?"
+
+Instead of generating a new LLM response each time, the system uses vector embeddings to detect that both queries have nearly the same intent and returns a cached answer.
+
+Benefits:
+
+- Fewer LLM API calls
+- Lower latency
+- Reduced token costs
+- Faster response times for repeated or similar questions
+
+Semantic caching is commonly used in modern AI platforms, RAG systems, and enterprise chatbots to avoid regenerating answers for semantically similar requests.
+
+The main tradeoff is the similarity threshold:
+
+- If the threshold is too high, useful cache hits are missed.
+- If the threshold is too low, users may receive inaccurate or irrelevant responses.
