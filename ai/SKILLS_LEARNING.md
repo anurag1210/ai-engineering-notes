@@ -1,0 +1,80 @@
+# Skills Learning
+
+Consolidated learning notes for the AI Engineering transition. Each section follows the same shape: **Concept → The change → Gotchas → Interview line → References.**
+
+## Table of Contents
+
+- [Redis — `SCAN` / `scan_iter()` vs `KEYS`](#redis--scan-scan_iter-vs-keys)
+
+---
+
+## Redis — `SCAN` / `scan_iter()` vs `KEYS`
+
+**Context:** FinSight semantic cache. Cache entries are namespaced as `finsight:cache:{md5(query)}` with a 24h TTL. Cache lookup/clear code originally used `redis_client.keys("finsight:cache:*")`. This note is the production swap to `scan_iter()`.
+
+### Concept — why this matters
+
+Redis is **single-threaded**. It processes one command at a time on a single event loop.
+
+- `KEYS pattern` scans the **entire keyspace in one blocking call** and returns everything at once. While it runs, every other client command queues behind it. On a large keyspace (100k+, and badly on millions) this freezes the server for hundreds of ms to seconds — cascading timeouts across the whole app. Redis itself says: never use `KEYS` in production.
+- `SCAN` does the same iteration but **incrementally, via a cursor**. Each call returns a small batch plus a cursor to resume from; iteration is complete when the cursor comes back to `0`. No single call blocks the server for long.
+
+`scan_iter()` in `redis-py` is a convenience wrapper that runs the cursor loop for you and **yields** keys.
+
+### The change
+
+```python
+# Before — blocking, whole keyspace at once, returns a list
+cached_keys = redis_client.keys("finsight:cache:*")
+
+# After — non-blocking, cursor-based batches, returns a generator
+cached_keys = redis_client.scan_iter(match="finsight:cache:*", count=100)
+```
+
+- `match=` — glob-style pattern filter (same semantics as the `KEYS` pattern).
+- `count=` — a **hint** for how many keys to pull per underlying `SCAN` call. Not a limit, not exact. Bigger = fewer round-trips but more work per call. `100` is a sane default; benchmarks show tiny counts make the *total* iteration much slower, and `1000+` completes faster (at the cost of a slightly heavier single call).
+
+### Gotchas
+
+1. **Generator, not a list.** `keys()` returns a `list`; `scan_iter()` returns a generator that yields lazily and **exhausts after one pass**.
+   - Breaks if downstream code calls `len(cached_keys)`, subscripts it (`cached_keys[0]`), or iterates it twice.
+   - If a concrete list is genuinely needed: `list(redis_client.scan_iter(match="finsight:cache:*", count=100))` — but that re-materialises everything and partly defeats the point on a huge keyspace. Prefer iterating directly.
+
+2. **No snapshot guarantee — not "atomic."** SCAN's guarantees are weak by design:
+   - Keys present for the *full* duration of the scan are returned at least once.
+   - Keys added/removed *during* the scan may or may not appear.
+   - The **same key can be returned more than once** (handle duplicates if it matters).
+   - Fine for a cache clear or a count. Do **not** describe it as an atomic snapshot.
+
+3. **Deleting while scanning.** Iterating and deleting in the same pass is fine for cache invalidation. For large batches consider `UNLINK` (non-blocking delete) instead of `DEL`.
+
+4. **If you only need a count**, don't iterate at all — `DBSIZE` returns total key count without scanning. (Only total keyspace, not pattern-filtered.)
+
+### The next upgrade beyond this (backlog)
+
+Pattern scanning — even with SCAN — is O(N) over the keyspace. If cache invalidation by pattern becomes a frequent hot-path operation, maintain a **secondary index** instead of scanning:
+
+```python
+# On write: register the key in a Set
+redis_client.set(cache_key, value, ex=TTL)
+redis_client.sadd("finsight:cache:index", cache_key)
+
+# On invalidate: read the index, no keyspace scan
+for k in redis_client.smembers("finsight:cache:index"):
+    redis_client.unlink(k)
+redis_client.delete("finsight:cache:index")
+```
+
+This turns a keyspace walk into a direct Set lookup. `scan_iter()` is the right move *today*; the secondary index is the move when scanning becomes frequent.
+
+### Interview line
+
+> "I used `keys()` for simplicity in development, but in production I'd switch to `scan_iter()` to avoid blocking Redis on a large keyspace — it iterates via cursor in non-blocking batches instead of scanning everything in one blocking call. If pattern invalidation became a hot path, I'd maintain a secondary index Set rather than scan at all."
+
+### References
+
+- [How to Replace KEYS Command with SCAN in Redis — OneUptime](https://oneuptime.com/blog/post/2026-03-31-redis-how-to-replace-keys-command-with-scan-in-redis/view)
+- [SCAN — Redis official docs](https://redis.io/docs/latest/commands/scan/) (read the *guarantees* section)
+- [Why You Should Not Use KEYS in Production — OneUptime](https://oneuptime.com/blog/post/2026-03-31-redis-why-not-use-keys-command/view) (secondary-index pattern)
+- [SCAN performance and the COUNT parameter — KeyDB](https://docs.keydb.dev/blog/2020/08/10/blog-post/) (COUNT benchmarks)
+- [SCAN, KEYS & safe retrieval — Last9](https://last9.io/blog/retrieving-all-keys-in-redis/) (DBSIZE for counting)
