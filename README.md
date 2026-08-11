@@ -10,7 +10,10 @@ Everything starts in [`SKILLS-LEARNING.md`](./SKILLS-LEARNING.md) as topic secti
 
 | Topic | Where | Status |
 |-------|-------|--------|
-| Redis — `SCAN` / `scan_iter()` vs `KEYS` | [`SKILLS-LEARNING.md`](./SKILLS-LEARNING.md#redis--scan-scan_iter-vs-keys) | ✅ |
+| Redis — `SCAN` / `scan_iter()` vs `KEYS` | [`SKILLS-LEARNING.md`](./SKILLS-LEARNING.md#redis--scan-scan_iter-vs-keys) |  
+✅30  Jul 2026 |
+| OpenAI `store=True` Completions Logging | [`SKILLS-LEARNING.md`](./ai/SKILLS_LEARNING.md) | ✅ 10 Aug 2026 |
+| Security — Role-play injection pattern expansion | [`SKILLS-LEARNING.md`](./ai/SKILLS_LEARNING.md#security--role-play-injection-pattern-expansion) | ✅ 11 Aug 2026 |
 
 _(Grows as notes are added. Split a topic into its own file once it outgrows a section.)_
 
