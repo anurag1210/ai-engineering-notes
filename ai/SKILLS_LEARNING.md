@@ -235,3 +235,94 @@ limiter = Limiter(key_func=get_api_key)
 > reach the LLM, which means no OpenAI cost and no backend load for abusive 
 > traffic. I limit by IP today; the production upgrade is limiting per API key 
 > so limits are enforced per client even behind a load balancer."
+
+
+## Retry Logic — Exponential Backoff with Tenacity on OpenAI LLM Calls
+
+**Context:** FinSight `src/generation/generator.py`. Added retry logic to the 
+LLM generation call to handle transient OpenAI failures gracefully.
+
+### The Problem
+
+Without retry logic, any transient OpenAI error — a 429 rate limit, 503 
+service unavailable, network timeout — immediately returns a 500 error to 
+the user. One hiccup and the whole request fails.
+
+### The Solution — Tenacity
+
+`tenacity` wraps the LLM call with a `@retry` decorator. On transient failure 
+it waits and retries automatically — the user never sees the error.
+
+```python
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from openai import RateLimitError, APIStatusError
+
+@retry(
+    retry=retry_if_exception_type((RateLimitError, APIStatusError)),
+    wait=wait_exponential(multiplier=1, min=1, max=8),
+    stop=stop_after_attempt(3),
+    reraise=True,
+    before_sleep=lambda retry_state: logger.warning(
+        f"OpenAI call failed — retrying attempt {retry_state.attempt_number}/3..."
+    )
+)
+def _invoke_llm_with_retry(llm, messages):
+    return llm.invoke(messages)
+```
+
+### Parameter Breakdown
+
+- `retry_if_exception_type((RateLimitError, APIStatusError))` — only retry transient errors. Never retry 400 bad request or guardrail rejections — retrying won't fix them.
+- `wait_exponential(multiplier=1, min=1, max=8)` — wait 1s → 2s → 4s → max 8s between attempts. Each wait doubles (exponential backoff).
+- `stop=stop_after_attempt(3)` — give up after 3 attempts.
+- `reraise=True` — after 3 failures raise the original error, not a tenacity error.
+- `before_sleep` — logs each retry attempt so you can see it happening in production.
+
+### Exponential Backoff + Jitter
+
+Exponential backoff prevents hammering the API on repeated failures. Jitter 
+adds randomness to desynchronise multiple users retrying simultaneously — 
+preventing the "thundering herd" problem where all users retry at the exact 
+same millisecond.
+
+```
+Without jitter: User A, B, C all retry at exactly t+2s → all fail again
+With jitter:    User A retries at t+2.3s, B at t+2.7s, C at t+2.1s → spread out
+```
+
+### Why Retry Logic Lives in `generator.py` Not `routes.py`
+
+Retry logic is an OpenAI concern, not an HTTP concern. If you switched from 
+FastAPI to a CLI tool tomorrow you'd still want retry on OpenAI calls. Put 
+retry logic as close to the failure point as possible.
+
+```
+routes.py    → HTTP concerns: auth, rate limiting, request/response
+generator.py → OpenAI concerns: retry, backoff, LLM calls
+```
+
+### Transient vs Permanent Failures
+
+```
+Retry these:          429 RateLimitError, 503 APIStatusError, timeouts
+Never retry these:    400 bad request, 401 invalid key, guardrail rejections
+```
+
+Retrying a permanent failure wastes time and makes the user wait longer 
+for the same error.
+
+### Interview Line
+
+> "I wrapped the LLM call in a tenacity retry decorator with exponential 
+> backoff — retries on RateLimitError and APIStatusError only, waits 
+> 1s → 2s → 4s between attempts, max 3 retries then reraises. I kept 
+> retry logic in the generation layer not the HTTP layer because it's an 
+> OpenAI concern not a routing concern. The before_sleep callback logs 
+> each retry so I have visibility in production when OpenAI starts flaking."
+
+### References
+
+- [Tenacity Documentation](https://tenacity.readthedocs.io/en/latest/)
+- [OpenAI Error Codes](https://platform.openai.com/docs/guides/error-codes)
+- [Exponential Backoff and Jitter — AWS](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/)
+- [Retry Pattern — Martin Fowler](https://martinfowler.com/bliki/RetryPattern.html)
