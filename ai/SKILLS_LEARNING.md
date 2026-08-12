@@ -151,3 +151,87 @@ Pattern list = fast-path pre-filter. Classifier = the real defence.
 ### References
 
 - [OWASP Top 10 for LLM Applications](https://owasp.org/www-project-top-10-for-large-language-model-applications/) — LLM01: Prompt Injection
+
+
+## Rate Limiting — SlowAPI on FastAPI `/query` endpoint
+
+**Context:** FinSight `src/api/routes.py` and `src/api/main.py`. Added before 
+public deployment to protect against abuse and runaway OpenAI costs.
+
+### The Problem
+
+Without rate limiting, one API key can send unlimited requests to `/query`. 
+Every request hits OpenAI and costs money. A buggy client in an infinite retry 
+loop, a bot, or a malicious actor could exhaust the entire OpenAI budget in minutes 
+on a public endpoint.
+
+### The Solution — SlowAPI
+
+`slowapi` is the standard rate limiting library for FastAPI. One decorator per route.
+
+**`main.py` — wire up the limiter:**
+```python
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+```
+
+**`routes.py` — apply to the route:**
+```python
+@router.post("/query")
+@limiter.limit("10/minute")
+async def query(request: Request, req: QueryRequest):
+    ...
+```
+
+### How It Works
+
+Request arrives → slowapi checks IP counter for this minute
+→ under 10 → let through, increment counter
+→ over 10 → return 429, never reaches your code
+Counter resets every minute.
+
+### Gotcha — `request: Request` is required
+
+slowapi needs the raw request object as the first function parameter to extract 
+the client IP. Without it, slowapi throws an error. The parameter name must be 
+`request` exactly.
+
+### Verified Output
+
+### Gotcha — `request: Request` is required
+
+slowapi needs the raw request object as the first function parameter to extract 
+the client IP. Without it, slowapi throws an error. The parameter name must be 
+`request` exactly.
+
+### Verified Output
+
+Requests 1-10 → 200 OK
+Requests 11-12 → 429 Too Many Requests
+
+
+Blocked requests never reach the LLM — no OpenAI call, no cost incurred.
+
+### Production Upgrade
+
+`get_remote_address` limits by IP. Behind a load balancer all traffic appears 
+to come from one IP — use API key as the limit key instead:
+
+```python
+def get_api_key(request: Request):
+    return request.headers.get("X-API-Key", get_remote_address(request))
+
+limiter = Limiter(key_func=get_api_key)
+```
+
+### Interview Line
+
+> "Rate limiting sits in front of the route handler — blocked requests never 
+> reach the LLM, which means no OpenAI cost and no backend load for abusive 
+> traffic. I limit by IP today; the production upgrade is limiting per API key 
+> so limits are enforced per client even behind a load balancer."
