@@ -15,6 +15,7 @@ Everything starts in [`SKILLS-LEARNING.md`](./SKILLS-LEARNING.md) as topic secti
 | Security — Role-play injection pattern expansion | [`SKILLS-LEARNING.md`](./ai/SKILLS_LEARNING.md#security--role-play-injection-pattern-expansion) | ✅ 11 Aug 2026 |
 | Rate Limiting — SlowAPI on FastAPI `/query` | [`SKILLS-LEARNING.md`](./ai/SKILLS_LEARNING.md#rate-limiting--slowapi-on-fastapi-query-endpoint) | ✅ 12 Aug 2026 |
 | Retry Logic — Exponential Backoff with Tenacity | [`SKILLS-LEARNING.md`](./ai/SKILLS_LEARNING.md#retry-logic--exponential-backoff-with-tenacity-on-openai-llm-calls) | ✅ 12 Aug 2026 |
+| Hybrid Search — BM25 + Vector + RRF | [`SKILLS-LEARNING.md`](./ai/SKILLS_LEARNING.md#hybrid-search--bm25--vector--rrf) | ✅ 13 Aug 2026 |
 
 _(Grows as notes are added. Split a topic into its own file once it outgrows a section.)_
 

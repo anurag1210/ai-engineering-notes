@@ -326,3 +326,137 @@ for the same error.
 - [OpenAI Error Codes](https://platform.openai.com/docs/guides/error-codes)
 - [Exponential Backoff and Jitter — AWS](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/)
 - [Retry Pattern — Martin Fowler](https://martinfowler.com/bliki/RetryPattern.html)
+
+
+## Hybrid Search — BM25 + Vector + RRF
+
+**Context:** FinSight `src/retrieval/retriever.py` and `src/generation/prompt_templates.py`. 
+Replaced pure semantic search with hybrid search to improve retrieval of exact 
+financial terms.
+
+### The Problem
+
+Pure semantic search embeds the query and finds chunks by vector similarity. 
+This works well for meaning-based queries but misses exact financial terms:
+
+- "AAPL" — ticker symbol, not a semantic concept
+- "$416 billion" — exact figure, semantically distant from "revenue"
+- "AppleCare" — product name, may not embed close to generic product queries
+
+**Proved with a real query — "AAPL stock repurchase program":**
+
+```
+Semantic only: 5 chunks
+Hybrid:        8 chunks
+BM25 contribution: 3 additional chunks (Pages 20, 20, 29)
+```
+
+Pages 20 and 29 contained exact matches for "repurchase program" and "stock" 
+that were semantically distant from the query embedding but lexically exact. 
+BM25 found them. Semantic search missed them entirely.
+
+### The Solution — Three Components
+
+**1. BM25Retriever** — keyword search over all chunks:
+```python
+from langchain_community.retrievers import BM25Retriever
+
+bm25_retriever = BM25Retriever.from_documents(docs)
+bm25_retriever.k = k
+```
+
+BM25 (Best Match 25) scores documents by term frequency with saturation 
+and document length normalisation. It beats TF-IDF for most retrieval tasks 
+because it prevents one term from dominating the score.
+
+**2. ChromaDB Vector Retriever** — semantic search:
+```python
+vector_retriever = vector_store.as_retriever(search_kwargs={"k": k})
+```
+
+**3. EnsembleRetriever** — merges both via RRF:
+```python
+from langchain_classic.retrievers import EnsembleRetriever
+
+ensemble = EnsembleRetriever(
+    retrievers=[bm25_retriever, vector_retriever],
+    weights=[0.5, 0.5]
+)
+results = ensemble.invoke(user_query)
+```
+
+### RRF — Reciprocal Rank Fusion
+
+RRF merges two ranked lists without needing scores to be on the same scale:
+
+```
+RRF_score(d) = 1 / (k + rank(d))   where k=60
+```
+
+A document ranked #1 in BM25 and #1 in vector gets the highest combined score. 
+Works because it uses ranks not raw scores — BM25 scores (unnormalised) and 
+cosine similarity (0-1) don't need calibration against each other.
+
+### How BM25 Index is Built
+
+BM25 needs all chunk texts upfront — it can't query ChromaDB lazily like the 
+vector retriever. So we load all documents from ChromaDB first:
+
+```python
+all_docs = vector_store.get()
+documents = all_docs['documents']
+metadatas = all_docs['metadatas']
+
+docs = [
+    Document(page_content=documents[i], metadata=metadatas[i])
+    for i in range(len(documents))
+]
+
+bm25_retriever = BM25Retriever.from_documents(docs)
+```
+
+For 300 chunks this is instantaneous. For millions of chunks you'd maintain 
+a separate BM25 index rather than rebuilding it per query.
+
+### Import Fix — LangChain Version Issue
+
+In LangChain 1.2.x `EnsembleRetriever` moved to `langchain_classic`:
+
+```python
+# Wrong in LangChain 1.2.x:
+from langchain.retrievers import EnsembleRetriever
+
+# Correct:
+from langchain_classic.retrievers import EnsembleRetriever
+```
+
+### Weights Tuning
+
+`weights=[0.5, 0.5]` gives equal weight to both retrievers. For financial 
+documents with lots of exact terms you could shift toward BM25:
+
+```python
+weights=[0.6, 0.4]  # favour keyword matching
+```
+
+For general knowledge queries shift toward semantic:
+
+```python
+weights=[0.3, 0.7]  # favour semantic matching
+```
+
+### Interview Line
+
+> "I replaced pure semantic search with hybrid search — BM25 keyword search 
+> combined with ChromaDB vector search, merged via Reciprocal Rank Fusion. 
+> I can prove it works: on a query for 'AAPL stock repurchase program', 
+> semantic search returned 5 chunks. Hybrid returned 8 — the 3 additional 
+> chunks were found by BM25 keyword matching on pages that were semantically 
+> distant but lexically exact. For financial documents with ticker symbols 
+> and specific figures, this is a real gap pure semantic search can't cover."
+
+### References
+
+- [BM25 — Wikipedia](https://en.wikipedia.org/wiki/Okapi_BM25)
+- [LangChain EnsembleRetriever docs](https://python.langchain.com/docs/how_to/ensemble_retriever/)
+- [Pinecone — Hybrid Search](https://www.pinecone.io/learn/hybrid-search-intro/)
